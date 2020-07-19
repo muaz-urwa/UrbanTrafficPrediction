@@ -3,6 +3,29 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+class LSTM(nn.Module):
+    def __init__(self, feat_size=1, network_size=1, hidden_layer_size=100, lstm_layers=1, dropout=0):
+        super().__init__()
+        self.hidden_layer_size = hidden_layer_size
+        self.lstm_layers = lstm_layers
+        
+        lstm_input = network_size + feat_size
+        self.lstm = nn.LSTM(input_size=lstm_input, hidden_size=hidden_layer_size,
+                            num_layers=lstm_layers, dropout=dropout)
+
+        self.linear = nn.Linear(hidden_layer_size, network_size)
+
+        
+    def initialize_hidden_cell(self, device):
+        self.hidden_cell = (torch.zeros(self.lstm_layers,1,self.hidden_layer_size, device=device),
+                    torch.zeros(self.lstm_layers,1,self.hidden_layer_size, device=device))
+
+    def forward(self,  input_seq, feat):
+        x = torch.cat((input_seq,feat),axis=1)
+        lstm_out, self.hidden_cell = self.lstm(x.view(len(input_seq) ,1, -1), self.hidden_cell)
+        predictions = self.linear(lstm_out.view(len(input_seq), -1))
+        return predictions
+
 class LSTM_Pipeline(nn.Module):
     """
 
