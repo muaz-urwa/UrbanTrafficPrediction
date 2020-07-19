@@ -1,4 +1,5 @@
 import pandas as pd
+import torch
 
 def loadData(file):
     data = pd.read_csv(file)
@@ -12,4 +13,5 @@ def getTimeSeries(df):
     table = pd.pivot_table(df, values='vehicle_count', index=['Date','Hour'],
                     columns=['DOLocationID'], aggfunc=np.sum, fill_value=0)
     return table
+
 
