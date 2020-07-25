@@ -21,7 +21,12 @@ class LSTM(nn.Module):
                     torch.zeros(self.lstm_layers,1,self.hidden_layer_size, device=device))
 
     def forward(self,  input_seq, feat):
-        x = torch.cat((input_seq,feat),axis=1)
+
+        if torch.__version__.startswith('0.4'):
+            x = torch.cat((input_seq,feat),dim=1)
+        else:
+            x = torch.cat((input_seq,feat),axis=1)
+
         lstm_out, self.hidden_cell = self.lstm(x.view(len(input_seq) ,1, -1), self.hidden_cell)
         predictions = self.linear(lstm_out.view(len(input_seq), -1))
         return predictions
@@ -73,7 +78,12 @@ class LSTM_Pipeline(nn.Module):
         # aggregation
         w = F.softmax(self.attachment_matrix, dim=1)
         x = torch.matmul(input_seq, self.attachment_matrix)
-        x = torch.cat((x,feat),axis=1)
+
+        if torch.__version__.startswith('0.4'):
+            x = torch.cat((x,feat),dim=1)
+        else:
+            x = torch.cat((x,feat),axis=1)
+        
 
         #temporal modelling
         lstm_out, self.hidden_cell = self.lstm(x.view(len(input_seq) ,1, -1), self.hidden_cell)

@@ -5,8 +5,12 @@ import os
 from sklearn.metrics import r2_score
 from sklearn.metrics import mean_squared_error
 from sklearn.metrics import mean_absolute_error
+import random
 
 def get_device(cuda=True):
+    """
+    Get device to do the computation. If cuda is true it tries to get a gpu if avaialble.
+    """
     if cuda == True:
         return torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     else:
@@ -14,6 +18,24 @@ def get_device(cuda=True):
 
 
 def prepare_data_lstm(path):
+    """
+    Prepares the dataframe for lstm models. 
+    
+    Arguments:
+    path: path of csv file which contains hourly level
+            traffic data and external features. 
+
+    Processing:
+    - removes lagged variables if present since lstm does not need them
+    - extract target columns: columns containing ridership data
+    - extract feature columns: columns containing external features and hour
+
+    Retruns:
+    - cleaned dataset: (dataframe)
+    - target columns: (list)
+    - feature columns: (list)
+
+    """
     dataset = pd.read_csv(path)
     print('Raw Shape: ', dataset.shape)
 
@@ -43,9 +65,14 @@ def create_data_sequences(x,y, bptt):
         create sequences of data for training and
         testing.
 
-    x: external features
-    y: ridhership data
-    bptt: sequence length
+    Arguments:
+    x: external features tensor
+    y: ridhership data tensor
+    bptt: sequence length for lstm
+
+    Returns:
+    inout_seq: list of training data and labels
+
     """
     inout_seq = []
     for i in range(len(x)-bptt):
@@ -58,6 +85,10 @@ def create_data_sequences(x,y, bptt):
 
 
 def train_test_split_monthly(dataset, month):
+    """
+    Divides the dataset dataframe into train and test dataframes
+    based on given month
+    """
     month_index  = pd.to_datetime(dataset.Date).dt.month == month
     trainData = dataset[~month_index]
     testData = dataset[month_index]
@@ -67,6 +98,10 @@ def train_test_split_monthly(dataset, month):
     return trainData, testData
 
 def train_test_split_temporal(dataset, train_ratio=0.75):
+    """
+    Divides the dataset dataframe into train and test dataframes
+    temporally based on given training set ratio
+    """
     sep = int(train_ratio*len(dataset))
 
     trainData = dataset[:sep]
@@ -78,6 +113,11 @@ def train_test_split_temporal(dataset, train_ratio=0.75):
     return trainData, testData
 
 def prepare_data_tensors(trainData, testData, features_cols, targetColumns, device):
+    """
+    Divides the training and testing data into feature and target tensors
+    Feature tensors contain external features
+    Target tensors contian ridership data.
+    """
     X_train = trainData[features_cols].values
     X_train = torch.tensor(X_train).float().to(device)
     print("train feature tensor shape :",X_train.shape)
@@ -101,18 +141,14 @@ def evaluate_lstm_pipeline_model(model, test_inout_seq, device):
     """
     Generate evaluation metrics for a given lstm pipline model
     """
-    model.eval()
-    prediction = []
-    with torch.no_grad():
-        for feat,seq, labels in test_inout_seq:
-            model.initialize_hidden_cell(device)
-            # = (torch.zeros(layers, 1, model.hidden_layer_size).to(device),
-            #                 torch.zeros(layers, 1, model.hidden_layer_size).to(device))
-            prediction.append(model(seq,feat)[-1])
 
+    if torch.__version__.startswith('0.4'):
+        y_test_ = torch.stack([labels[-1] for feat,seq, labels in test_inout_seq], dim=0).detach().cpu().numpy()
+    else:
+        y_test_ = torch.stack([labels[-1] for feat,seq, labels in test_inout_seq], axis=0).detach().cpu().numpy()
 
-    y_test_ = torch.stack([labels[-1] for feat,seq, labels in test_inout_seq], axis=0).detach().cpu().numpy()
-    y_pred_ = torch.stack(prediction).detach().cpu().numpy()
+    
+    y_pred_ = run_inference(model, test_inout_seq, device)
 
     res = y_pred_ - y_test_
     r2 = r2_score(y_test_, y_pred_, multioutput='variance_weighted')
@@ -123,7 +159,7 @@ def evaluate_lstm_pipeline_model(model, test_inout_seq, device):
 
 def run_inference(model, test_inout_seq, device):
     """
-    Generate evaluation metrics for a given lstm pipline model
+    Runs inference on given data sequences and returns results
     """
     model.eval()
     prediction = []
@@ -139,7 +175,10 @@ def run_inference(model, test_inout_seq, device):
 
 
 def get_community_attachment_matix(targetColumns, zone_to_comm_file):
-    #zone_to_comm_file = '/home/urwa/Documents/side_projects/urban/UrbanTemporalNetworks/Data/ZonetoComm.csv'
+    """
+    Reads taxi zone to community mapping from a file and creates an 
+    attachment matrix
+    """
     comms = pd.read_csv(zone_to_comm_file)  
     communities = list(set(comms.start_community))
 
@@ -161,6 +200,10 @@ def get_community_attachment_matix(targetColumns, zone_to_comm_file):
 
 
 def store_chekpoint(exp_dir, model,optimizer,lr_scheduler):
+    """
+    Saves the state of model, optimizer and scheduler 
+    in experiment directory.
+    """
     print('------- Saving checkpoint---------------')
     checkpoint_path = os.path.join(exp_dir,'checkpoint.pth')
 
@@ -172,6 +215,10 @@ def store_chekpoint(exp_dir, model,optimizer,lr_scheduler):
 
 
 def load_chekpoint(exp_dir, model,optimizer,lr_scheduler):
+    """
+    Loads the state of model, optimizer and scheduler 
+    in experiment directory.
+    """
     print('------- Loading checkpoint---------------')
     checkpoint_path = os.path.join(exp_dir,'checkpoint.pth')
 
@@ -183,7 +230,11 @@ def load_chekpoint(exp_dir, model,optimizer,lr_scheduler):
     return model, optimizer, lr_scheduler
 
 
-def lstm_monthly_dataloader(dataset, features_cols, targetColumns, month, bptt, device):
+def lstm_monthly_dataloader(dataset, features_cols, targetColumns, month, bptt, device, shuffle=False):
+
+    """
+    Creates monthly training and testing data from dataset
+    """
     
     trainData, testData = train_test_split_monthly(dataset, month)
 
@@ -196,11 +247,18 @@ def lstm_monthly_dataloader(dataset, features_cols, targetColumns, month, bptt, 
     print("\nsequences")
     print(train_inout_seq[0][0].shape,train_inout_seq[0][1].shape, train_inout_seq[0][2].shape)
         
+    if shuffle:
+        random.shuffle(train_inout_seq)
+
     return train_inout_seq, test_inout_seq
 
 
-def lstm_temporal_dataloader(dataset, features_cols, targetColumns, train_ratio, bptt, device):
+def lstm_temporal_dataloader(dataset, features_cols, targetColumns, train_ratio, bptt, device, shuffle=False):
     
+    """
+    Creates training and testing datasets from dataset
+    """
+
     trainData, testData = train_test_split_temporal(dataset, train_ratio)
 
     X_train, y_train, X_test, y_test = prepare_data_tensors(trainData, testData, 
@@ -211,13 +269,21 @@ def lstm_temporal_dataloader(dataset, features_cols, targetColumns, train_ratio,
     test_inout_seq = create_data_sequences(X_test,y_test, bptt)
     print("\nsequences")
     print(train_inout_seq[0][0].shape,train_inout_seq[0][1].shape, train_inout_seq[0][2].shape)
-        
+    
+    if shuffle:
+        random.shuffle(train_inout_seq)
+
     return train_inout_seq, test_inout_seq
 
 
 
 def train_one_epoch(model, optimizer, loss_function, train_inout_seq, device):
+    """
+    Trains one epoch on data and returns the avg training loss
+    """
+
     model.train()
+    random.shuffle(train_inout_seq)
     
     losses = []
     for feat,seq, labels in train_inout_seq:
@@ -235,8 +301,13 @@ def train_one_epoch(model, optimizer, loss_function, train_inout_seq, device):
 
 
 def get_edge_pred_df(y_pred_, targetColumns, weights_path):
+    """
+    Creates taxi zone level prediction from aggregated prediction
+    based on the aggregation to zone weights file
+    """
+
     edge_prediction_df = pd.DataFrame(y_pred_)
-    edge_prediction_df.columns = targetColumns #testData[6:][targetColumns].columns
+    edge_prediction_df.columns = targetColumns 
 
     zone_weights = pd.read_csv(weights_path)
     zone_weights['Borough'] = zone_weights['Borough'].astype(str)
@@ -256,6 +327,10 @@ def get_edge_pred_df(y_pred_, targetColumns, weights_path):
 
 
 def load_edge_test_data_temporal(file_path, train_ratio, bptt):
+    """
+    Loads the test taxi zone level data from given file and 
+    preprocesses it for temporal test split.
+    """
     edge_testData = pd.read_csv(file_path)
     
     sep = int(train_ratio*len(edge_testData))
@@ -277,6 +352,10 @@ def load_edge_test_data_temporal(file_path, train_ratio, bptt):
     return edge_testData
 
 def load_edge_test_data_monthly(file_path, month, bptt):
+    """
+    Loads the test taxi zone level data from given file and 
+    preprocesses it for monthly test split.
+    """
     edge_testData = pd.read_csv(file_path)
 
     month_index  = pd.to_datetime(edge_testData.Date).dt.month == month
@@ -301,6 +380,10 @@ def load_edge_test_data_monthly(file_path, month, bptt):
     return edge_testData
 
 def evaluate_edge_temporal(model, test_inout_seq, device, targetColumns, weights_path, test_data_path, train_ratio, bptt):
+    """
+    Generate taxi zone level evaluation metrics for a given lstm model
+    with temporal train test split.
+    """
     y_pred_ = run_inference(model, test_inout_seq, device)
     edge_prediction_df = get_edge_pred_df(y_pred_, targetColumns, weights_path)
     edge_testData = load_edge_test_data_temporal(test_data_path, train_ratio, bptt)
@@ -308,6 +391,10 @@ def evaluate_edge_temporal(model, test_inout_seq, device, targetColumns, weights
     return res, r2, rmse, mae
 
 def evaluate_edge_monthy(model, test_inout_seq, device, targetColumns, weights_path, test_data_path, month, bptt):
+    """
+    Generate taxi zone level evaluation metrics for a given lstm model
+    with monthly train test split.
+    """
     y_pred_ = run_inference(model, test_inout_seq, device)
     edge_prediction_df = get_edge_pred_df(y_pred_, targetColumns, weights_path)
     edge_testData = load_edge_test_data_monthly(test_data_path, month, bptt)
@@ -315,6 +402,9 @@ def evaluate_edge_monthy(model, test_inout_seq, device, targetColumns, weights_p
     return res, r2, rmse, mae
 
 def edge_metrics(testdf, preddf):
+    """
+    Syncs the columns in two dataframes and compute metrics.
+    """
     preddf.columns = preddf.columns.astype(str)
     testdf.columns = testdf.columns.astype(str)
     preddf = preddf[testdf.columns]
